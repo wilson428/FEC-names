@@ -1,6 +1,7 @@
 import sqlite3, csv, re
 
 path = "/Users/cewilson/Desktop/source/FEC/"
+months = { "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04", "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08", "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12" }
 
 #optional: returns sqlite queries as dictionaries instead of lists
 def dict_factory(cursor, row):
@@ -14,32 +15,72 @@ conn = sqlite3.connect(path + 'names.sqlite')
 conn.row_factory = dict_factory
 c = conn.cursor()
 
+def split_name(name):
+    #remove suffixes and salutations that occur after surname in some records
+    #this is tailored to problems I found in FEC records, not a general solution
+    name = name.replace(".", "").replace("DR ","").replace(",DR", "").replace("REV ", "").replace(", PHD","").replace(",PHD", "").replace(", III","").replace(", JR","").replace(", SR", "").replace(", MD", "").title()
+
+    parts = re.split(",+", name) #sometimes two quotes end up adjacent, but doesn't appear to denote blank field
+    last = parts[0]
+    if len(parts) > 1:
+        first = re.split("[\s,]+", parts[1].strip())[0].replace("(", "").replace(")", "")
+    else:
+        first = None
+    return last, first
+
+def get_date(dt):
+    dt = dt.split("-")
+    dt = "20" + dt[2] + "-" + months[dt[1]] + "-" + dt[0]
+    return dt
+
 def load_data(candidate, filename):
     #make table once
     c.execute('CREATE TABLE IF NOT EXISTS %s \
                 ("id" INTEGER PRIMARY KEY AUTOINCREMENT, \
                 "name" VARCHAR(50), \
+                "first" VARCHAR(30), \
+                "last" VARCHAR(30), \
                 "employer" VARCHAR(50), \
                 "occupation" VARCHAR(50), \
                 "city" VARCHAR(50), \
                 "state" VARCHAR(50), \
                 "zip" VARCHAR(10), \
-                "date" VARCHAR(50), \
-                "amount" INTEGER)' % candidate)
+                "date" DATE, \
+                "amount" FLOAT, \
+                "desc" VARCHAR(20), \
+                "memo_code" VARCHAR(10), \
+                "memo_text" VARCHAR(50), \
+                "form_type" VARCHAR(10), \
+                "file_num" VARCHAR(10), \
+                "tran_id" VARCHAR(10), \
+                "election_type" VARCHAR(10))' % candidate)
 
     c.execute('DELETE FROM %s' % candidate)
     conn.commit()
 
     #this is a large file, so we don't want to load it all into memory with .read() or .readlines()
     #format: cmte_id,cand_id,cand_nm,contbr_nm,contbr_city,contbr_st,contbr_zip,contbr_employer,contbr_occupation,contb_receipt_amt,contb_receipt_dt,receipt_desc,memo_cd,memo_text,form_tp,file_num,tran_id,election_tp
+
+    count = 1
+    print count
+    if count % 100 == 0:
+        conn.commit()
+        return
+
     for line in csv.reader(open(path + filename, "r"), delimiter=",", quotechar='"'):
         if line[0] != 'cmte_id':
+            last, first = split_name(line[3])
+            date = get_date(line[10])
+
             #note: cut off zip after 5 digits and remove periods from names, to avoid double-counting due to inconsistent data entry
             try:
-                c.execute('INSERT INTO %s ("name", "employer", "occupation", "city", "state", "zip", "date", "amount") \
-                         VALUES ("%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s")' % (candidate, line[3], line[7], line[8], line[4], line[5], line[6][0:5], line[10], line[9]))
+                c.execute('INSERT INTO %s ("name", "last", "first", "employer", "occupation", "city", "state", "zip", \
+                            "date", "amount", "desc", "memo_code", "memo_text", "form_type", "file_num", "tran_id", "election_type") \
+                         VALUES ("%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", %.2f, "%s", "%s", "%s", "%s", "%s", "%s", "%s" )' %
+                          (candidate, line[3], last, first, line[7], line[8], line[4], line[5], line[6][0:5], date, float(line[9]), line[11], line[12], line[13], line[14], line[15], line[16], line[17]))
             except Exception as e:
                 print line, e
+            count = count + 1
     conn.commit()       
 
 #some basic queries to compare against fec.gov maps
@@ -61,25 +102,14 @@ def get_names(candidate):
     #this will undercount two people with the same name in the same zip code, but the collision space appears very low
     #this will ocercount one person who reports two different zipcodes. This also appears to occur with tolerable infrequency
 
-    names = c.execute("SELECT name, zip, count(*) from %s group by name, zip order by name" % candidate).fetchall()
+    names = c.execute("SELECT first, last, zip, count(*) from %s group by name, zip order by name" % candidate).fetchall()
     print len(names)
 
-    for name in names:
-        original = name['name']
-        name['name'] = name['name'].replace(".", "").replace("DR ","").replace("REV ", "").replace(", PHD","").replace(", III","").replace(", JR","").replace(", SR", "").replace(", MD", "").replace(",MD").title()
-
-        parts = name['name'].split(",")
-        if len(parts) > 1:
-            last = parts[0]
-            first = re.split("[\s,]+", parts[1].strip())[0]
-            first = first.replace("(", "").replace(")", "")
-            if first == "Dr" or first == "Md":
-                print original, name['name']
-            
-            try:
-                c.execute('''INSERT OR IGNORE INTO "names" ("candidate", "first", "last", "zip") VALUES (?, ?, ?, ?)''', (candidate, first, last, name['zip']))
-            except Exception as e:
-                print last, first, e
+    for name in names:            
+        try:
+            c.execute('''INSERT OR IGNORE INTO "names" ("candidate", "first", "last", "zip") VALUES (?, ?, ?, ?)''', (candidate, first, last, name['zip']))
+        except Exception as e:
+            print last, first, e
     conn.commit()
 
 def compile_names():
@@ -141,11 +171,11 @@ def write_stats(threshhold):
 
 
 
-#load_data("Obama", "P80003338-ALL.csv")
+load_data("Obama", "P80003338-ALL.csv")
 #load_data("Romney", "P80003353-ALL.csv")
 #get_names("Obama")
 #get_names("Romney")
-write_stats(1000)
+#write_stats(1000)
 #compile_names()
 #hyphens()   
 conn.close()
