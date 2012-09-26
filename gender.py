@@ -1,31 +1,8 @@
 import json, sqlite3
 
-def dict_factory(cursor, row):
-    d = {}
-    for idx, col in enumerate(cursor.description):
-        d[col[0]] = row[idx]
-    return d
-
-
-path = "/Users/cewilson/Desktop/source/FEC/"
-
-conn = sqlite3.connect(path + 'names.sqlite')
-conn.row_factory = dict_factory
-c = conn.cursor()
-
-def hyphens():
-    not_founds = c.execute("SELECT * FROM stats where gender = 'Not found'").fetchall()
-    for not_found in not_founds:
-        h = not_found['name'].split('-')
-        if len(h) > 1:
-            g0 = get_gender(h[0])
-            g1 = get_gender(h[1])
-            if g0 == g1 and (g0 == "male" or g0 == "female"):
-                c.execute("update stats set gender = \"%s\" where name = \"%s\"" % (g0, not_found['name']))
-            conn.commit()
-    
-
-def input_genders(mn=10):
+gender = json.load(open("gender.json", "r"))
+  
+def input_genders(conn, c, mn=10):
     not_founds = c.execute("SELECT * FROM stats where gender = 'Not found' and (obama >= %i or romney >= %i) order by name" % (mn, mn)).fetchall()
     for not_found in not_founds:
         g = raw_input("guess gender for %s: " % not_found['name']).lower()
@@ -45,12 +22,12 @@ def input_genders(mn=10):
 
 def get_gender(name):
     try:
-        g = gender.gender[name.upper()]
+        g = gender[name.title()]
     except KeyError as e:
         g = "Not found"
     return g
 
-def save_genders():
+def save_genders(c):
     all_names = {}
     names = json.load(open("gender.json", "r"))
     for name in names:
@@ -65,5 +42,3 @@ def save_genders():
     f.close()
     
 #save_genders()
-
-conn.close()
