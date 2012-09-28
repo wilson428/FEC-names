@@ -1,9 +1,15 @@
+'''
+See README for overview and LICENSE for license
+Corrections and coding advice always welcome! cewilson@yahoo-inc.com
+'''
+
 import sqlite3, csv, re
 from gender import *
 
-path = "/Users/cewilson/Desktop/source/FEC/"
+#can set path to where SQLite database is stored to be different from code directory if desired
+path = ""
 
-#optional: returns sqlite queries as dictionaries instead of lists
+#returns sqlite queries as dictionaries instead of lists
 def dict_factory(cursor, row):
     d = {}
     for idx, col in enumerate(cursor.description):
@@ -17,7 +23,7 @@ c = conn.cursor()
 
 #read the (large) csv files from the FEC into SQLite databases
 #http://fec.gov/disclosurep/PDownload.do
-def load_data(candidate="", filename=""):
+def load_data(filename=""):
     #make table once
     c.execute('CREATE TABLE IF NOT EXISTS donations \
                 ("id" INTEGER PRIMARY KEY AUTOINCREMENT, \
@@ -77,9 +83,10 @@ def split_name(name):
         first = ""
     return last, first
 
-#convert date to SQL format
+#for converting date to SQL format
 #http://www.sqlite.org/lang_datefunc.html
 months = { "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04", "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08", "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12" }
+
 party = {
     "Bachmann, Michele" : "Rep",
     "Cain, Herman" : "Rep",
@@ -95,8 +102,6 @@ party = {
     "Romney, Mitt" : "Rep",
     "Santorum, Rick" : "Rep"
 }
-    
-
 
 def get_date(dt):
     dt = dt.split("-")
@@ -146,42 +151,52 @@ def get_genders():
                 c.execute("update stats set gender = \"%s\" where name = \"%s\"" % (g, not_found['name']))
             conn.commit()
             
-#reduces to groups of unique first names
-def compile_names():
-    c.execute('''CREATE TABLE IF NOT EXISTS "stats"
-               ("id" INTEGER PRIMARY KEY AUTOINCREMENT,
-                "name" VARCHAR(25),
-                "gender" VARCHAR(15),
-                "party" VARCHAR(5),
-                "count" INTEGER,
-                "amount" FLOAT, CONSTRAINT unq UNIQUE (name, party))''')
+#reduces to groups of unique first or last names
+def compile_names(first=True):
+    name_type = "first" if first else "last"
+        
+    c.execute('CREATE TABLE IF NOT EXISTS "%s" \
+               ("id" INTEGER PRIMARY KEY AUTOINCREMENT, \
+                "name" VARCHAR(25), \
+                "gender" VARCHAR(15), \
+                "party" VARCHAR(5), \
+                "count" INTEGER, \
+                "amount" FLOAT, CONSTRAINT unq UNIQUE (name, party))' % name_type)
 
     c.execute('DELETE FROM stats')
     conn.commit()
 
     #select every unique first name
-    names = c.execute("SELECT first, party, count(*) as count, sum(amount) as amount FROM names group by first, party order by first").fetchall()
+    names = c.execute("SELECT %s, party, count(*) as count, sum(amount) as amount FROM names group by %s, party order by %s" % (name_type, name_type, name_type)).fetchall()
 
     first_letter = ''
     for name in names:
-        if len(name['first']) > 1:
+        nm = name[name_type]
+        if len(nm) > 1:
             #track progreess
-            if name['first'][0] != first_letter:
-                first_letter = name['first'][0]
-                print "Searching names beginning with %s..." % first_letter
-                
-            c.execute('INSERT INTO "stats" ("name", "gender", "party", "count", "amount") VALUES ("%s", "%s", "%s", %i, %.2f)' %
-                      (name['first'], get_gender(name['first']), name['party'], name['count'], name['amount']))
+            if nm[0] != first_letter:
+                first_letter = nm[0]
+                print "Searching %s names beginning with %s..." % (name_type, first_letter)
+
+            #don't bother with gender for surnames
+            if name_type == "first":
+                c.execute('INSERT INTO "%s" ("name", "gender", "party", "count", "amount") VALUES ("%s", "%s", "%s", %i, %.2f)' %
+                      (name_type, nm, get_gender(nm), name['party'], name['count'], name['amount']))
+            else:
+                c.execute('INSERT INTO "%s" ("name", "party", "count", "amount") VALUES ("%s", "%s", %i, %.2f)' %
+                      (name_type, nm, name['party'], name['count'], name['amount']))
         
     conn.commit()
 
 
-def write_stats(threshold):
-    f = open("data/stats_%i.csv" % threshold, "w")
+def write_stats(threshold, first=True):
+    name_type = "first" if first else "last"
+
+    f = open("data/stats_%s_%i.csv" % (name_type, threshold), "w")
     f.write("name,gender,total,d_count,r_count,drate,rrate,r_amount,d_amount,advantage,tilt,letter\r")
 
     totals = {}
-    for party in c.execute("SELECT party, count(*) FROM names group by party").fetchall():
+    for party in c.execute("SELECT party, count(*) FROM %s group by party" % name_type).fetchall():
         totals[party["party"]] = party["count(*)"]
 
     #this joins records for the same name in different parties. It is not elegant
@@ -189,8 +204,8 @@ def write_stats(threshold):
     #surely a better way here, but I'm a JOIN novice
     names = c.execute('SELECT d.party, d.name as "name", d.gender as gender, d.count as "d_count", d.amount as "d_amount", \
                         r.party, r.name as "r_name", r.count as "r_count", r.amount as "r_amount" \
-                        from stats as d LEFT OUTER JOIN stats as r ON d.name = r.name \
-                        WHERE d.party = "Dem" AND r.party = "Rep" AND (d.count >= %i OR r.count >= %i) order by d.count desc' % (threshold, threshold)).fetchall()
+                        from %s as d LEFT OUTER JOIN %s as r ON d.name = r.name \
+                        WHERE d.party = "Dem" AND r.party = "Rep" AND (d.count >= %i OR r.count >= %i) order by d.count desc' % (name_type, name_type, threshold, threshold)).fetchall()
     
     for name in names:
         l = 26 - ord(name['name'][0]) + 65        
@@ -207,18 +222,18 @@ def write_stats(threshold):
             advantage = 100 * float(r_amount) / (d_amount + r_amount)
 
             if len(name['name']) > 1:
-                f.write("%s,%s,%i,%i,%i,%.3f,%.3f,%.2f,%.2f,%.2f,%.1f,%i\r" % (name['name'], name['gender'], (dc + rc), dc, rc, drate, rrate, d_amount, r_amount, advantage, tilt, l))
+                f.write("%s,%s,%i,%i,%i,%.3f,%.3f,%.2f,%.2f,%.1f,%.1f,%i\r" % (name['name'], name['gender'], (dc + rc), dc, rc, drate, rrate, d_amount, r_amount, advantage, tilt, l))
 
     f.close()
 
+#Data downloaded from here: ftp://ftp.fec.gov/FEC/Presidential_Map/2012/P00000001/P00000001-ALL.zip
+#Warning: 450 MB uncompressed    
 
-#load_data("", "P00000001-ALL.csv")
-#load_data("Obama", "P80003338-ALL.csv")
-#load_data("Romney", "P80003353-ALL.csv")
-#get_names()
-#get_names("Romney")
-#compile_names()
-#get_genders()
-write_stats(10)
+load_data("P00000001-ALL.csv")
+get_names()
+compile_names(True)
+compile_names(False)
+write_stats(25, True)
+write_stats(25, False)
 
 conn.close()
