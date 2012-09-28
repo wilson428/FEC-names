@@ -1,5 +1,6 @@
 import json, sqlite3
 
+
 gender = json.load(open("gender.json", "r"))
   
 def input_genders(conn, c, mn=10):
